@@ -112,7 +112,6 @@
 
         .main-content {
             flex: 1;
-            /*display: flex;*/
             position: relative;
         }
 
@@ -121,7 +120,7 @@
             top: 0;
             left: 0;
             right: 0;
-            bottom: 0; /* fill parent */
+            bottom: 0;
         }
 
         #graph {
@@ -135,7 +134,7 @@
         }
 
         .sidebar {
-            position: absolute;  /* instead of flex child */
+            position: absolute;
             top: 0;
             right: 0;
             bottom: 0;
@@ -217,6 +216,9 @@
             border-radius: 8px;
             backdrop-filter: blur(10px);
             border: 1px solid rgba(255, 255, 255, 0.1);
+            max-height: 60vh;
+            overflow-y: auto;
+            min-width: 180px;
         }
 
         .legend-item {
@@ -231,6 +233,26 @@
             width: 12px;
             height: 12px;
             border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .legend-section {
+            margin-bottom: 15px;
+        }
+
+        .legend-section:last-child {
+            margin-bottom: 0;
+        }
+
+        .legend-section-title {
+            font-size: 11px;
+            font-weight: bold;
+            color: #a8d8ea;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+            padding-bottom: 4px;
         }
 
         .stats {
@@ -306,9 +328,15 @@
                     </select>
                 </div>
                 <div class="control-group">
-                    <label>Filter Category:</label>
-                    <select id="categoryFilter">
-                        <option value="all">All Categories</option>
+                    <label>Filter:</label>
+                    <select id="filterType">
+                        <option value="category">Category</option>
+                        <option value="provider">Provider</option>
+                        <option value="subcategory">Subcategory</option>
+                        <option value="trl">TRL Level</option>
+                    </select>
+                    <select id="filterValue">
+                        <option value="all">All</option>
                     </select>
                 </div>
                 <div class="control-group">
@@ -321,34 +349,20 @@
         <div class="main-content">
             <div class="graph-container">
                 <svg id="graph"></svg>
-                <!-- legend on the side for node types -->
-                <div class="legend">
-                    <h4 style="margin-bottom: 10px; color: white; font-size: 14px;">Node Types</h4>
-                    <div class="legend-item">
-                        <div class="legend-color" style="background: #ff6b6b;"></div>
-                        <span>Technologies</span>
-                    </div>
-                    <div class="legend-item">
-                        <div class="legend-color" style="background: #4ecdc4;"></div>
-                        <span>Categories</span>
-                    </div>
-                    <div class="legend-item">
-                        <div class="legend-color" style="background: #45b7d1;"></div>
-                        <span>Providers</span>
-                    </div>
-                    <div class="legend-item">
-                        <div class="legend-color" style="background: #f9ca24;"></div>
-                        <span>TRL Levels</span>
-                    </div>
+                <!-- Dynamic legend -->
+                <div class="legend" id="legend">
+                    <h4 style="margin-bottom: 10px; color: white; font-size: 14px;">Legend</h4>
+                    <div id="legendContent"></div>
                 </div>
                 
                 <!-- stats for our tech db -->
                 <div class="stats">
                     <div id="statsContent">
-                        <div><strong>Total Technologies:</strong> <span id="totalTech">0</span></div>
-                        <div><strong>Categories:</strong> <span id="totalCategories">0</span></div>
-                        <div><strong>Providers:</strong> <span id="totalProviders">0</span></div>
+                        <div><strong>Showing:</strong> <span id="showingTech">0</span> / <span id="totalTech">0</span> Technologies</div>
+                        <div><strong>Categories:</strong> <span id="showingCategories">0</span> / <span id="totalCategories">0</span></div>
+                        <div><strong>Providers:</strong> <span id="showingProviders">0</span> / <span id="totalProviders">0</span></div>
                         <div><strong>Connections:</strong> <span id="totalConnections">0</span></div>
+                        <div id="filterInfo" style="margin-top: 8px; font-style: italic; color: #a8d8ea; font-size: 11px;"></div>
                     </div>
                 </div>
 
@@ -373,17 +387,78 @@
         let simulation;
         let svg, g, zoom;
         
-        // Color schemes
-        const colors = {
-            technology: '#ff6b6b',
-            category: '#4ecdc4',
-            provider: '#45b7d1',
-            trl: '#f9ca24',
-            subcategory: '#a55eea'
+        // Color palettes for different node types
+        const colorPalettes = {
+            category: d3.schemeCategory10,
+            subcategory: d3.schemeSet3,
+            trl: d3.schemeSpectral[9],
+            provider: d3.schemePaired
         };
+
+        // Color maps to store consistent colors for each entity
+        let colorMaps = {
+            category: new Map(),
+            subcategory: new Map(),
+            trl: new Map(),
+            provider: new Map()
+        };
+
+        // Technology color (consistent)
+        const technologyColor = '#ff6b6b';
 
         // Excel file handling
         document.getElementById('excelFile').addEventListener('change', handleExcelFile);
+        document.getElementById('filterType').addEventListener('change', updateFilterOptions);
+
+        function updateFilterOptions() {
+            const filterType = document.getElementById('filterType').value;
+            const filterValue = document.getElementById('filterValue');
+            const currentValue = filterValue.value;
+            
+            // Clear existing options
+            filterValue.innerHTML = '<option value="all">All</option>';
+            
+            // Get unique values based on filter type
+            const uniqueValues = new Set();
+            
+            technologiesData.forEach(tech => {
+                switch (filterType) {
+                    case 'category':
+                        tech.category.forEach(cat => uniqueValues.add(cat));
+                        break;
+                    case 'provider':
+                        uniqueValues.add(tech.provider_name);
+                        break;
+                    case 'subcategory':
+                        tech.subcategory.forEach(subcat => uniqueValues.add(subcat));
+                        break;
+                    case 'trl':
+                        uniqueValues.add(`TRL ${tech.trl}`);
+                        break;
+                }
+            });
+            
+            // Add options sorted
+            Array.from(uniqueValues).sort((a, b) => {
+                // Special sorting for TRL levels
+                if (filterType === 'trl') {
+                    const aNum = parseInt(a.replace('TRL ', ''));
+                    const bNum = parseInt(b.replace('TRL ', ''));
+                    return aNum - bNum;
+                }
+                return a.localeCompare(b);
+            }).forEach(value => {
+                const option = document.createElement('option');
+                option.value = value.toLowerCase().replace(/\s+/g, '_');
+                option.textContent = value;
+                filterValue.appendChild(option);
+            });
+            
+            // Restore previous selection if it still exists
+            if (currentValue && filterValue.querySelector(`option[value="${currentValue}"]`)) {
+                filterValue.value = currentValue;
+            }
+        }
 
         function handleExcelFile(event) {
             const file = event.target.files[0];
@@ -415,7 +490,10 @@
                         throw new Error('No valid technology data found in Excel file');
                     }
                     
-                    updateCategoryFilter();
+                    // Initialize color mappings
+                    initializeColorMappings();
+                    
+                    updateFilterOptions();
                     updateGraph();
                     updateStats();
                     showStatus(`Successfully loaded ${technologiesData.length} technologies!`, 2000);
@@ -506,6 +584,123 @@
             return !['no', 'false', '0', 'n'].includes(lowerValue);
         }
 
+        function initializeColorMappings() {
+            // Clear existing mappings
+            colorMaps.category.clear();
+            colorMaps.subcategory.clear();
+            colorMaps.trl.clear();
+            colorMaps.provider.clear();
+
+            // Collect unique values
+            const categories = new Set();
+            const subcategories = new Set();
+            const trls = new Set();
+            const providers = new Set();
+
+            technologiesData.forEach(tech => {
+                tech.category.forEach(cat => categories.add(cat));
+                tech.subcategory.forEach(subcat => subcategories.add(subcat));
+                trls.add(`TRL ${tech.trl}`);
+                providers.add(tech.provider_name);
+            });
+
+            // Assign colors
+            assignColors(Array.from(categories), 'category');
+            assignColors(Array.from(subcategories), 'subcategory');
+            assignColors(Array.from(trls), 'trl');
+            assignColors(Array.from(providers), 'provider');
+        }
+
+        function assignColors(items, type) {
+            const palette = colorPalettes[type];
+            
+            if (type === 'provider' && items.length > palette.length) {
+                // For providers, use a color scale that can handle many values
+                const colorScale = d3.scaleOrdinal()
+                    .domain(items)
+                    .range(d3.quantize(d3.interpolateRainbow, items.length));
+                
+                items.forEach(item => {
+                    colorMaps[type].set(item, colorScale(item));
+                });
+            } else {
+                // For other types with limited values, use the predefined palettes
+                items.forEach((item, index) => {
+                    const colorIndex = index % palette.length;
+                    colorMaps[type].set(item, palette[colorIndex]);
+                });
+            }
+        }
+
+        function getNodeColor(node) {
+            if (node.type === 'technology') {
+                return technologyColor;
+            }
+            
+            const colorMap = colorMaps[node.type];
+            return colorMap ? colorMap.get(node.id) || '#95a5a6' : '#95a5a6';
+        }
+
+        function updateLegend(viewMode) {
+            const legendContent = document.getElementById('legendContent');
+            let html = '';
+
+            // Always show technology nodes
+            html += `
+                <div class="legend-section">
+                    <div class="legend-section-title">Technologies</div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: ${technologyColor};"></div>
+                        <span>Technology Nodes</span>
+                    </div>
+                </div>
+            `;
+
+            // Show legend for current view mode
+            const currentColorMap = colorMaps[viewMode];
+            if (currentColorMap && currentColorMap.size > 0) {
+                const sectionTitle = viewMode.charAt(0).toUpperCase() + viewMode.slice(1);
+                html += `<div class="legend-section">
+                    <div class="legend-section-title">${sectionTitle}s</div>`;
+                
+                // Sort items for consistent display
+                const sortedItems = Array.from(currentColorMap.entries()).sort(([a], [b]) => {
+                    // Special sorting for TRL levels
+                    if (viewMode === 'trl') {
+                        const aNum = parseInt(a.replace('TRL ', ''));
+                        const bNum = parseInt(b.replace('TRL ', ''));
+                        return aNum - bNum;
+                    }
+                    return a.localeCompare(b);
+                });
+
+                // Limit the number of items shown in legend for providers (too many)
+                const itemsToShow = viewMode === 'provider' && sortedItems.length > 20 
+                    ? sortedItems.slice(0, 20) 
+                    : sortedItems;
+
+                itemsToShow.forEach(([item, color]) => {
+                    const displayName = item.length > 20 ? item.substring(0, 20) + '...' : item;
+                    html += `
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: ${color};"></div>
+                            <span title="${item}">${displayName}</span>
+                        </div>
+                    `;
+                });
+
+                if (viewMode === 'provider' && sortedItems.length > 20) {
+                    html += `<div class="legend-item" style="font-style: italic; opacity: 0.7;">
+                        <span>... and ${sortedItems.length - 20} more providers</span>
+                    </div>`;
+                }
+
+                html += '</div>';
+            }
+
+            legendContent.innerHTML = html;
+        }
+
         function showStatus(message, duration = null) {
             const statusDiv = document.getElementById('statusMessage');
             statusDiv.textContent = message;
@@ -547,27 +742,30 @@
 
         // Sample data generator (keeping for testing)
         function generateSampleData() {
-            const categories = [['hydrogen'], ['ccus'], ['renewables'], ['digital'], ['energy_storage'], ['smart_grids']];
+            const categories = [['Hydrogen'], ['CCUS'], ['Renewables'], ['Digital'], ['Energy Storage'], ['Smart Grids'], ['Nuclear'], ['Bioenergy'], ['Grid Infrastructure']];
             const subcategories = {
                 hydrogen: [['Production'], ['Storage'], ['Transport'], ['Utilization']],
                 ccus: [['Capture'], ['Utilization'], ['Storage'], ['Transport']],
                 renewables: [['Solar'], ['Wind'], ['Hydro'], ['Biomass']],
                 digital: [['AI/ML'], ['IoT'], ['Blockchain'], ['Digital Twin']],
-                energy_storage: [['Battery'], ['Mechanical'], ['Thermal'], ['Chemical']],
-                smart_grids: [['Grid Management'], ['Demand Response'], ['Distribution'], ['Monitoring']]
+                'energy storage': [['Battery'], ['Mechanical'], ['Thermal'], ['Chemical']],
+                'smart grids': [['Grid Management'], ['Demand Response'], ['Distribution'], ['Monitoring']],
+                nuclear: [['Fission'], ['Fusion'], ['SMR'], ['Waste Management']],
+                bioenergy: [['Biogas'], ['Biofuel'], ['Biomass'], ['Waste-to-Energy']],
+                'grid infrastructure': [['Transmission'], ['Distribution'], ['Substations'], ['Monitoring']]
             };
             
-            const providers = ['TechCorp A', 'Innovation Labs B', 'Energy Solutions C', 'Future Tech D', 'Green Energy E'];
+            const providers = ['TechCorp A', 'Innovation Labs B', 'Energy Solutions C', 'Future Tech D', 'Green Energy E', 'Advanced Systems F', 'Power Dynamics G', 'Clean Tech H', 'Smart Energy I', 'NextGen Solutions J'];
             const sampleTechs = [];
             
-            for (let i = 1; i <= 50; i++) {
+            for (let i = 1; i <= 80; i++) {
                 const categoryArray = categories[Math.floor(Math.random() * categories.length)];
-                const category = categoryArray[0];
-                const subcategoryArray = subcategories[category][Math.floor(Math.random() * subcategories[category].length)];
+                const category = categoryArray[0].toLowerCase();
+                const subcategoryArray = subcategories[category] ? subcategories[category][Math.floor(Math.random() * subcategories[category].length)] : [['General']];
                 
                 sampleTechs.push({
                     tech_number: `T${i.toString().padStart(3, '0')}`,
-                    tech_name: `${category.charAt(0).toUpperCase() + category.slice(1)} Technology ${i}`,
+                    tech_name: `${categoryArray[0]} Technology ${i}`,
                     tech_description: `Advanced ${subcategoryArray[0].toLowerCase()} solution for ${category} applications with innovative features and high efficiency.`,
                     provider_name: providers[Math.floor(Math.random() * providers.length)],
                     category: categoryArray,
@@ -583,35 +781,63 @@
 
         function loadSampleData() {
             technologiesData = generateSampleData();
-            updateCategoryFilter();
+            initializeColorMappings();
+            updateFilterOptions();
             updateGraph();
             updateStats();
             showStatus('Sample data loaded successfully!', 2000);
         }
 
-        function updateGraph() {
-            const viewMode = document.getElementById('viewMode').value;
-            const categoryFilter = document.getElementById('categoryFilter').value;
+        function getFilteredData() {
+            const filterType = document.getElementById('filterType').value;
+            const filterValue = document.getElementById('filterValue').value;
             const searchTerm = document.getElementById('searchBox').value.toLowerCase();
             
-            // Filter data
             let filteredData = technologiesData;
-            if (categoryFilter !== 'all') {
-                const filterCategory = categoryFilter.replace(/_/g, ' ');
-                filteredData = filteredData.filter(tech => 
-                    tech.category.some(cat => cat.toLowerCase().replace(/\s+/g, '_') === categoryFilter)
-                );
+            
+            // Apply main filter
+            if (filterValue !== 'all') {
+                const filterValueDecoded = filterValue.replace(/_/g, ' ');
+                filteredData = filteredData.filter(tech => {
+                    switch (filterType) {
+                        case 'category':
+                            return tech.category.some(cat => cat.toLowerCase().replace(/\s+/g, '_') === filterValue);
+                        case 'provider':
+                            return tech.provider_name.toLowerCase().replace(/\s+/g, '_') === filterValue;
+                        case 'subcategory':
+                            return tech.subcategory.some(subcat => subcat.toLowerCase().replace(/\s+/g, '_') === filterValue);
+                        case 'trl':
+                            return `trl_${tech.trl}` === filterValue;
+                        default:
+                            return true;
+                    }
+                });
             }
+            
+            // Apply search filter
             if (searchTerm) {
                 filteredData = filteredData.filter(tech => 
                     tech.tech_name.toLowerCase().includes(searchTerm) ||
                     tech.tech_description.toLowerCase().includes(searchTerm) ||
-                    tech.provider_name.toLowerCase().includes(searchTerm)
+                    tech.provider_name.toLowerCase().includes(searchTerm) ||
+                    tech.category.some(cat => cat.toLowerCase().includes(searchTerm)) ||
+                    tech.subcategory.some(subcat => subcat.toLowerCase().includes(searchTerm))
                 );
             }
+            
+            return filteredData;
+        }
+
+        function updateGraph() {
+            const viewMode = document.getElementById('viewMode').value;
+            
+            // Get filtered data
+            const filteredData = getFilteredData();
 
             // Generate graph based on view mode
             currentGraph = generateGraph(filteredData, viewMode);
+            updateLegend(viewMode);
+            updateStats(filteredData);
             renderGraph();
         }
 
@@ -736,14 +962,14 @@
                 .attr('stroke', d => d3.interpolateViridis(Math.random()))
                 .attr('stroke-width', 1.5);
 
-            // Create nodes
+            // Create nodes with dynamic colors
             const node = g.append('g')
                 .selectAll('circle')
                 .data(currentGraph.nodes)
                 .enter().append('circle')
                 .attr('class', 'node')
                 .attr('r', d => d.size)
-                .attr('fill', d => colors[d.type] || '#95a5a6')
+                .attr('fill', d => getNodeColor(d))
                 .attr('stroke', '#ffffff')
                 .call(d3.drag()
                     .on('start', dragstarted)
@@ -829,8 +1055,33 @@
                 html += `
                     <div class="detail-item">
                         <div class="detail-label">Type</div>
-                        <div class="detail-value">${node.type}</div>
+                        <div class="detail-value">${node.type.charAt(0).toUpperCase() + node.type.slice(1)}</div>
                     </div>
+                `;
+                
+                // Add category information for subcategories
+                if (node.type === 'subcategory') {
+                    const relatedCategories = new Set();
+                    node.technologies.forEach(tech => {
+                        tech.category.forEach(cat => {
+                            // Check if this subcategory belongs to this category
+                            if (tech.subcategory.includes(node.name)) {
+                                relatedCategories.add(cat);
+                            }
+                        });
+                    });
+                    
+                    if (relatedCategories.size > 0) {
+                        html += `
+                            <div class="detail-item">
+                                <div class="detail-label">Related Categories</div>
+                                <div class="detail-value">${Array.from(relatedCategories).join(', ')}</div>
+                            </div>
+                        `;
+                    }
+                }
+                
+                html += `
                     <div class="detail-item">
                         <div class="detail-label">Connected Technologies</div>
                         <div class="detail-value">${node.technologies.length}</div>
@@ -838,7 +1089,7 @@
                     <div class="detail-item">
                         <div class="detail-label">Technologies</div>
                         <div class="detail-value">
-                            ${node.technologies.map(tech => `<div style="margin: 2px 0; cursor: pointer;" onclick="showTechnologyDetails('${tech.tech_number}')">${tech.tech_name}</div>`).join('')}
+                            ${node.technologies.map(tech => `<div style="margin: 2px 0; cursor: pointer; padding: 2px; border-radius: 3px; background: rgba(255,255,255,0.1);" onclick="showTechnologyDetails('${tech.tech_number}')">${tech.tech_name}</div>`).join('')}
                         </div>
                     </div>
                 `;
@@ -864,24 +1115,61 @@
             document.getElementById('sidebar').classList.remove('open');
         }
 
-        function updateStats() {
-            const uniqueCategories = new Set();
-            const uniqueProviders = new Set(technologiesData.map(tech => tech.provider_name));
+        function updateStats(filteredData = null) {
+            // Use filtered data if provided, otherwise use all data
+            const dataToAnalyze = filteredData || technologiesData;
             
+            // Calculate total stats (from all data)
+            const totalUniqueCategories = new Set();
+            const totalUniqueProviders = new Set(technologiesData.map(tech => tech.provider_name));
             technologiesData.forEach(tech => {
-                tech.category.forEach(cat => uniqueCategories.add(cat));
+                tech.category.forEach(cat => totalUniqueCategories.add(cat));
             });
             
+            // Calculate current/filtered stats
+            const currentUniqueCategories = new Set();
+            const currentUniqueProviders = new Set(dataToAnalyze.map(tech => tech.provider_name));
+            dataToAnalyze.forEach(tech => {
+                tech.category.forEach(cat => currentUniqueCategories.add(cat));
+            });
+            
+            // Update display
+            document.getElementById('showingTech').textContent = dataToAnalyze.length;
             document.getElementById('totalTech').textContent = technologiesData.length;
-            document.getElementById('totalCategories').textContent = uniqueCategories.size;
-            document.getElementById('totalProviders').textContent = uniqueProviders.size;
+            document.getElementById('showingCategories').textContent = currentUniqueCategories.size;
+            document.getElementById('totalCategories').textContent = totalUniqueCategories.size;
+            document.getElementById('showingProviders').textContent = currentUniqueProviders.size;
+            document.getElementById('totalProviders').textContent = totalUniqueProviders.size;
             document.getElementById('totalConnections').textContent = currentGraph.links.length;
+            
+            // Update filter info
+            const filterInfo = document.getElementById('filterInfo');
+            const filterType = document.getElementById('filterType').value;
+            const filterValue = document.getElementById('filterValue').value;
+            const searchTerm = document.getElementById('searchBox').value;
+            
+            let infoText = '';
+            if (filterValue !== 'all') {
+                const filterValueDecoded = filterValue.replace(/_/g, ' ').toUpperCase();
+                infoText += `Filtered by ${filterType}: ${filterValueDecoded}`;
+            }
+            if (searchTerm) {
+                if (infoText) infoText += ' | ';
+                infoText += `Search: "${searchTerm}"`;
+            }
+            if (!infoText && dataToAnalyze.length === technologiesData.length) {
+                infoText = 'Showing all technologies';
+            }
+            
+            filterInfo.textContent = infoText;
         }
 
         function resetView() {
             document.getElementById('viewMode').value = 'category';
-            document.getElementById('categoryFilter').value = 'all';
+            document.getElementById('filterType').value = 'category';
+            document.getElementById('filterValue').value = 'all';
             document.getElementById('searchBox').value = '';
+            updateFilterOptions();
             updateGraph();
             
             // Reset zoom
@@ -913,7 +1201,11 @@
 
         // Event listeners
         document.getElementById('viewMode').addEventListener('change', updateGraph);
-        document.getElementById('categoryFilter').addEventListener('change', updateGraph);
+        document.getElementById('filterType').addEventListener('change', () => {
+            updateFilterOptions();
+            updateGraph();
+        });
+        document.getElementById('filterValue').addEventListener('change', updateGraph);
         document.getElementById('searchBox').addEventListener('input', updateGraph);
 
         // Handle window resize
